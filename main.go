@@ -12,7 +12,24 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"uamemos/service"
 	_profile "uamemos/service/profile"
+	"uamemos/setup"
+	"uamemos/store"
+	"uamemos/store/db"
+
+	_ "github.com/mattn/go-sqlite3"
+)
+
+const (
+	greetingBanner = `
+███╗   ███╗███████╗███╗   ███╗ ██████╗ ███████╗
+████╗ ████║██╔════╝████╗ ████║██╔═══██╗██╔════╝
+██╔████╔██║█████╗  ██╔████╔██║██║   ██║███████╗
+██║╚██╔╝██║██╔══╝  ██║╚██╔╝██║██║   ██║╚════██║
+██║ ╚═╝ ██║███████╗██║ ╚═╝ ██║╚██████╔╝███████║
+╚═╝     ╚═╝╚══════╝╚═╝     ╚═╝ ╚═════╝ ╚══════╝
+`
 )
 
 var (
@@ -26,7 +43,7 @@ var (
 		Short: `An open-source, self-hosted memo hub with knowledge management and social networking.`,
 		Run: func(_cmd *cobra.Command, _args []string) {
 			ctx, cancel := context.WithCancel(context.Background())
-			s, err := server.NewServer(ctx, profile)
+			s, err := service.NewService(ctx, profile)
 			if err != nil {
 				cancel()
 				fmt.Printf("failed to create server, error: %+v\n", err)
@@ -48,8 +65,9 @@ var (
 			println(greetingBanner)
 			fmt.Printf("Version %s has started at :%d\n", profile.Version, profile.Port)
 			if err := s.Start(ctx); err != nil {
+				fmt.Printf("%s\n", err)
 				if err != http.ErrServerClosed {
-					fmt.Printf("failed to start server, error: %+v\n", err)
+					fmt.Printf("failed to start server, error: %v\n", err)
 					cancel()
 				}
 			}
@@ -147,5 +165,8 @@ const (
 )
 
 func main() {
-
+	err := rootCmd.Execute()
+	if err != nil {
+		panic(err)
+	}
 }

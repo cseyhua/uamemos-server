@@ -3,8 +3,11 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
+	"uamemos/api"
 	"uamemos/service/profile"
 	"uamemos/store"
 	"uamemos/store/db"
@@ -19,8 +22,9 @@ import (
 
 // 定义服务
 type Service struct {
-	g  *gin.Engine
-	db *sql.DB
+	g    *gin.Engine
+	http *http.Server
+	db   *sql.DB
 
 	ID      string
 	Profile *profile.Profile
@@ -40,7 +44,8 @@ func timeoutMiddleware() gin.HandlerFunc {
 }
 
 func NewService(ctx context.Context, profile *profile.Profile) (*Service, error) {
-	g := gin.New()
+	gin.SetMode(gin.ReleaseMode)
+	g := gin.Default()
 
 	db := db.NewDB(profile)
 	if err := db.Open(ctx); err != nil {
@@ -87,6 +92,58 @@ func NewService(ctx context.Context, profile *profile.Profile) (*Service, error)
 
 	apiGroup := g.Group("/api")
 	apiGroup.Use(func(ctx *gin.Context) {
-		ctx.Next()
+		JWTMiddleware(s, ctx, secret)
 	})
+	s.registerSystemRoutes(apiGroup)
+	s.registerAuthRoutes(apiGroup, secret)
+
+	return s, nil
+}
+
+func (s *Service) Start(ctx context.Context) error {
+	if err := s.createServerStartActivity(ctx); err != nil {
+		return errors.Wrap(err, "failed to create activity")
+	}
+	server := &http.Server{
+		Addr:    fmt.Sprint(":", s.Profile.Port),
+		Handler: s.g,
+	}
+	s.http = server
+	return server.ListenAndServe()
+}
+
+func (s *Service) Shutdown(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// 关闭gin逻辑
+	if err := s.http.Shutdown(ctx); err != nil {
+		fmt.Printf("failed to shutdown service, error: %v\n", err)
+	}
+
+	if err := s.db.Close(); err != nil {
+		fmt.Printf("failed to close database, err: %v\n", err)
+	}
+	fmt.Printf("uamemos stopped properly\n")
+}
+
+func (s *Service) createServerStartActivity(ctx context.Context) error {
+	payload := api.ActivityServerStartPayload{
+		ServerID: s.ID,
+		Profile:  s.Profile,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return errors.Wrap(err, "failed to marshal activity payload")
+	}
+	activity, err := s.Store.CreateActivity(ctx, &api.ActivityCreate{
+		CreatorID: api.UnknownID,
+		Type:      api.ActivityServerStart,
+		Level:     api.ActivityInfo,
+		Payload:   string(payloadBytes),
+	})
+	if err != nil || activity == nil {
+		return errors.Wrap(err, "failed to create activity")
+	}
+	return err
 }

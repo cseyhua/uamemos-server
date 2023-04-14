@@ -2,11 +2,19 @@ package service
 
 import (
 	"context"
+	"net/http"
 	"uamemos/api"
 	"uamemos/common"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+func (s *Service) registerSystemRoutes(g *gin.RouterGroup) {
+	g.GET("/ping", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, composeResponse(s.Profile))
+	})
+}
 
 func (s *Service) getSystemServiceID(ctx context.Context) (string, error) {
 	serviceID, err := s.Store.FindSystemSetting(ctx, &api.SystemSettingFind{

@@ -4,43 +4,122 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"uamemos/api"
+	"uamemos/common"
+	"uamemos/service/auth"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/pkg/errors"
 )
 
 const (
-	// Context section
-	// The key name used to store user id in the context
-	// user id is extracted from the jwt token subject field.
 	userIDContextKey = "user-id"
 )
 
+type Claims struct {
+	Name string `json:"name"`
+	jwt.RegisteredClaims
+}
+
+func audienceContains(audience jwt.ClaimStrings, token string) bool {
+	for _, v := range audience {
+		if v == token {
+			return true
+		}
+	}
+	return false
+}
+
+func getUserIDContextKey() string {
+	return userIDContextKey
+}
+
+func extractTokenFromHeader(ctx *gin.Context) (string, error) {
+	authHeader := ctx.Request.Header.Get("Authorization")
+	if authHeader == "" {
+		return "", nil
+	}
+	authHeaderParts := strings.Fields(authHeader)
+	if len(authHeaderParts) != 2 || strings.ToLower(authHeaderParts[0]) != "bearer" {
+		return "", errors.New("Authorization header format must be Bearer {token}")
+	}
+	return authHeaderParts[1], nil
+}
+
+func findAccessToken(ctx *gin.Context) string {
+	accessToken := ""
+	cookie, err := ctx.Cookie(auth.AccessTokenCookieName)
+	if err != nil {
+		accessToken = cookie
+	}
+	if accessToken == "" {
+		accessToken, _ = extractTokenFromHeader(ctx)
+	}
+	return accessToken
+}
+
+func GenerateTokensAndSetCookies(ctx *gin.Context, user *api.User, secret string) error {
+	accessToken, err := auth.GenerateAccessToken(user.Name, user.ID, secret)
+	if err != nil {
+		return errors.Wrap(err, "failed to generate access token")
+	}
+
+	cookieExp := time.Now().Add(auth.CookieExpDuration)
+	setTokenCookie(ctx, auth.AccessTokenCookieName, accessToken, cookieExp)
+
+	// We generate here a new refresh token and saving it to the cookie.
+	refreshToken, err := auth.GenerateRefreshToken(user.Name, user.ID, secret)
+	if err != nil {
+		return errors.Wrap(err, "failed to generate refresh token")
+	}
+	setTokenCookie(ctx, auth.RefreshTokenCookieName, refreshToken, cookieExp)
+
+	return nil
+}
+
+func setTokenCookie(c *gin.Context, name, token string, expiration time.Time) {
+	cookie := new(http.Cookie)
+	cookie.Name = name
+	cookie.Value = token
+	cookie.MaxAge = expiration.Second() - time.Now().Second()
+	cookie.Path = "/"
+	// Http-only helps mitigate the risk of client side script accessing the protected cookie.
+	cookie.HttpOnly = true
+	cookie.SameSite = http.SameSiteStrictMode
+	c.SetCookie(cookie.Name, cookie.Value, expiration.Second()-time.Now().Second(), cookie.Path, "", true, cookie.HttpOnly)
+}
+
 func JWTMiddleware(server *Service, ctx *gin.Context, secret string) {
-	path := c.Request().URL.Path
-	method := c.Request().Method
+	path := ctx.Request.URL.Path
+	method := ctx.Request.Method
 
-	if server.defaultAuthSkipper(c) {
-		return next(c)
+	if server.defaultAuthSkipper(ctx) {
+		ctx.Next()
+		return
 	}
 
-	// Skip validation for server status endpoints.
 	if common.HasPrefixes(path, "/api/ping", "/api/idp", "/api/user/:id") && method == http.MethodGet {
-		return next(c)
+		ctx.Next()
+		return
 	}
 
-	token := findAccessToken(c)
+	token := findAccessToken(ctx)
 	if token == "" {
 		// Allow the user to access the public endpoints.
 		if common.HasPrefixes(path, "/o") {
-			return next(c)
+			ctx.Next()
+			return
 		}
 		// When the request is not authenticated, we allow the user to access the memo endpoints for those public memos.
 		if common.HasPrefixes(path, "/api/status", "/api/memo") && method == http.MethodGet {
-			return next(c)
+			ctx.Next()
+			return
 		}
-		return echo.NewHTTPError(http.StatusUnauthorized, "Missing access token")
+		ctx.String(http.StatusUnauthorized, "Missing access token")
+		return
 	}
 
 	claims := &Claims{}
@@ -57,11 +136,12 @@ func JWTMiddleware(server *Service, ctx *gin.Context, secret string) {
 	})
 
 	if !audienceContains(claims.Audience, auth.AccessTokenAudienceName) {
-		return echo.NewHTTPError(http.StatusUnauthorized,
+		ctx.String(http.StatusUnauthorized,
 			fmt.Sprintf("Invalid access token, audience mismatch, got %q, expected %q. you may send request to the wrong environment",
 				claims.Audience,
 				auth.AccessTokenAudienceName,
 			))
+		return
 	}
 
 	generateToken := time.Until(claims.ExpiresAt.Time) < auth.RefreshThresholdDuration
@@ -74,19 +154,16 @@ func JWTMiddleware(server *Service, ctx *gin.Context, secret string) {
 				generateToken = true
 			}
 		} else {
-			return &echo.HTTPError{
-				Code:     http.StatusUnauthorized,
-				Message:  "Invalid or expired access token",
-				Internal: err,
-			}
+			ctx.String(http.StatusUnauthorized, "Invalid or expired access token")
+			return
 		}
 	}
 
 	// We either have a valid access token or we will attempt to generate new access token and refresh token
-	ctx := c.Request().Context()
 	userID, err := strconv.Atoi(claims.Subject)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusUnauthorized, "Malformed ID in the token.")
+		ctx.String(http.StatusUnauthorized, "Malformed ID in the token.")
+		return
 	}
 
 	// Even if there is no error, we still need to make sure the user still exists.
@@ -94,23 +171,25 @@ func JWTMiddleware(server *Service, ctx *gin.Context, secret string) {
 		ID: &userID,
 	})
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Server error to find user ID: %d", userID)).SetInternal(err)
+		ctx.String(http.StatusInternalServerError, fmt.Sprintf("Server error to find user ID: %d", userID))
+		return
 	}
 	if user == nil {
-		return echo.NewHTTPError(http.StatusUnauthorized, fmt.Sprintf("Failed to find user ID: %d", userID))
+		ctx.String(http.StatusUnauthorized, fmt.Sprintf("Failed to find user ID: %d", userID))
+		return
 	}
 
 	if generateToken {
-		generateTokenFunc := func() error {
-			rc, err := c.Cookie(auth.RefreshTokenCookieName)
+		generateTokenFunc := func() (int, string) {
+			rc, err := ctx.Cookie(auth.RefreshTokenCookieName)
 
 			if err != nil {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Failed to generate access token. Missing refresh token.")
+				return http.StatusUnauthorized, "Failed to generate access token. Missing refresh token."
 			}
 
 			// Parses token and checks if it's valid.
 			refreshTokenClaims := &Claims{}
-			refreshToken, err := jwt.ParseWithClaims(rc.Value, refreshTokenClaims, func(t *jwt.Token) (any, error) {
+			refreshToken, err := jwt.ParseWithClaims(rc, refreshTokenClaims, func(t *jwt.Token) (any, error) {
 				if t.Method.Alg() != jwt.SigningMethodHS256.Name {
 					return nil, errors.Errorf("unexpected refresh token signing method=%v, expected %v", t.Header["alg"], jwt.SigningMethodHS256)
 				}
@@ -124,37 +203,38 @@ func JWTMiddleware(server *Service, ctx *gin.Context, secret string) {
 			})
 			if err != nil {
 				if err == jwt.ErrSignatureInvalid {
-					return echo.NewHTTPError(http.StatusUnauthorized, "Failed to generate access token. Invalid refresh token signature.")
+					return http.StatusUnauthorized, "Failed to generate access token. Invalid refresh token signature."
 				}
-				return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Server error to refresh expired token. User Id %d", userID)).SetInternal(err)
+				return http.StatusInternalServerError, fmt.Sprintf("Server error to refresh expired token. User Id %d", userID)
 			}
 
 			if !audienceContains(refreshTokenClaims.Audience, auth.RefreshTokenAudienceName) {
-				return echo.NewHTTPError(http.StatusUnauthorized,
+				return http.StatusUnauthorized,
 					fmt.Sprintf("Invalid refresh token, audience mismatch, got %q, expected %q. you may send request to the wrong environment",
 						refreshTokenClaims.Audience,
 						auth.RefreshTokenAudienceName,
-					))
+					)
 			}
 
 			// If we have a valid refresh token, we will generate new access token and refresh token
 			if refreshToken != nil && refreshToken.Valid {
-				if err := GenerateTokensAndSetCookies(c, user, secret); err != nil {
-					return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Server error to refresh expired token. User Id %d", userID)).SetInternal(err)
+				if err := GenerateTokensAndSetCookies(ctx, user, secret); err != nil {
+					return http.StatusInternalServerError, fmt.Sprintf("Server error to refresh expired token. User Id %d", userID)
 				}
 			}
 
-			return nil
+			return 0, ""
 		}
 
 		// It may happen that we still have a valid access token, but we encounter issue when trying to generate new token
 		// In such case, we won't return the error.
-		if err := generateTokenFunc(); err != nil && !accessToken.Valid {
-			return err
+		if code, str := generateTokenFunc(); code != 0 && !accessToken.Valid {
+			ctx.String(code, str)
+			return
 		}
 	}
 
 	// Stores userID into context.
-	c.Set(getUserIDContextKey(), userID)
-	return next(c)
+	ctx.Set(getUserIDContextKey(), userID)
+	ctx.Next()
 }

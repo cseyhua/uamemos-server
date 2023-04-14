@@ -15,7 +15,7 @@ import (
 	"uamemos/service/version"
 )
 
-// go:embed migration
+//go:embed migration/*
 var migrationFS embed.FS
 
 // go:embed seed
@@ -127,8 +127,9 @@ func (db *DB) applyLatestSchema(ctx context.Context) error {
 	}
 	latestSchemaPath := fmt.Sprintf("%s/%s/%s", "migration", schemaMode, latestSchemaFileName)
 	buf, err := migrationFS.ReadFile(latestSchemaPath)
+	fmt.Printf("schema path: %s\n", os.Args[0])
 	if err != nil {
-		return fmt.Errorf("failed to read latest schema %q, error %w", latestSchemaPath, err)
+		return fmt.Errorf("failed to read latest schema: %q, error %w", latestSchemaPath, err)
 	}
 	stmt := string(buf)
 	if err := db.execute(ctx, stmt); err != nil {

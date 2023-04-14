@@ -20,14 +20,15 @@ type Profile struct {
 	Version string `json:"version"`
 }
 
-func (p *Profile) isDev() bool {
-	return p.Mode != "prod"
-}
+// func (p *Profile) isDev() bool {
+// 	return p.Mode != "prod"
+// }
 
 func checkDSN(dataDir string) (string, error) {
 	if !filepath.IsAbs(dataDir) {
 		// 第一个参数为程序运行目录
 		absDir, err := filepath.Abs(filepath.Dir(os.Args[0]) + "/" + dataDir)
+		fmt.Printf("abs dir: %s-%s\n", dataDir, absDir)
 		if err != nil {
 			return "", err
 		}
@@ -60,7 +61,7 @@ func GetProfile() (*Profile, error) {
 	}
 
 	profile.Data = dataDir
-	profile.DSN = fmt.Sprintf("%s/memos_%s.db", dataDir, profile.Mode)
+	profile.DSN = fmt.Sprintf("%s/uamemos_%s.db", dataDir, profile.Mode)
 	profile.Version = version.GetCurrentVersion(profile.Mode)
 
 	return &profile, nil
