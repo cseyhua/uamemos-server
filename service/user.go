@@ -1,7 +1,6 @@
 package service
 
 import (
-	"fmt"
 	"net/http"
 
 	"uamemos/api"
@@ -12,7 +11,6 @@ import (
 func (s *Service) registerUserRoutes(rg *gin.RouterGroup) {
 	rg.GET("/user/me", func(ctx *gin.Context) {
 		userID, ok := ctx.Get(getUserIDContextKey())
-		fmt.Printf("\n%d\n", userID)
 		if !ok {
 			ctx.String(http.StatusUnauthorized, "Missing auth session")
 			return

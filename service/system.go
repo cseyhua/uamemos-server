@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
 	"uamemos/api"
@@ -33,7 +32,6 @@ func (s *Service) registerSystemRoutes(g *gin.RouterGroup) {
 			hostUser.OpenID = ""
 			hostUser.Email = ""
 		}
-		fmt.Println(hostUser)
 		systemStatus := api.SystemStatus{
 			Host:               hostUser,
 			Profile:            *s.Profile,
