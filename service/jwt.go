@@ -52,7 +52,7 @@ func extractTokenFromHeader(ctx *gin.Context) (string, error) {
 func findAccessToken(ctx *gin.Context) string {
 	accessToken := ""
 	cookie, err := ctx.Cookie(auth.AccessTokenCookieName)
-	if err != nil {
+	if err == nil {
 		accessToken = cookie
 	}
 	if accessToken == "" {
@@ -107,6 +107,9 @@ func JWTMiddleware(server *Service, ctx *gin.Context, secret string) {
 	}
 
 	token := findAccessToken(ctx)
+
+	fmt.Printf("Token: %s", token)
+
 	if token == "" {
 		// Allow the user to access the public endpoints.
 		if common.HasPrefixes(path, "/o") {
@@ -236,5 +239,6 @@ func JWTMiddleware(server *Service, ctx *gin.Context, secret string) {
 
 	// Stores userID into context.
 	ctx.Set(getUserIDContextKey(), userID)
+	fmt.Printf("UserID: %d\n", userID)
 	ctx.Next()
 }

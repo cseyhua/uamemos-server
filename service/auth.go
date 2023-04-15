@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"uamemos/api"
 	"uamemos/common"
@@ -12,9 +13,49 @@ import (
 )
 
 func (s *Service) registerAuthRoutes(rg *gin.RouterGroup, secret string) {
+	rg.POST("/auth/signin", func(ctx *gin.Context) {
+		signin := &api.SignIn{}
+		if err := json.NewDecoder(ctx.Request.Body).Decode(signin); err != nil {
+			ctx.String(http.StatusBadRequest, "Malformatted signup request")
+			return
+		}
+		userFind := &api.UserFind{
+			Name: &signin.Name,
+		}
+		user, err := s.Store.FindUser(ctx, userFind)
+		if err != nil && common.ErrorCode(err) != common.NotFound {
+			ctx.String(http.StatusInternalServerError, "Incorrect login credentials, please try again")
+			return
+		}
+		if user == nil {
+			ctx.String(http.StatusUnauthorized, "Incorrect login credentials, please try again")
+			return
+		} else if user.RowStatus == api.Archived {
+			ctx.String(http.StatusForbidden, fmt.Sprintf("User has been archived with username %s", signin.Name))
+			return
+		}
+
+		// Compare the stored hashed password, with the hashed version of the password that was received.
+		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(signin.Pass)); err != nil {
+			// If the two passwords don't match, return a 401 status.
+			ctx.String(http.StatusUnauthorized, "Incorrect login credentials, please try again")
+			return
+		}
+
+		if err := GenerateTokensAndSetCookies(ctx, user, secret); err != nil {
+			ctx.String(http.StatusInternalServerError, "Failed to generate tokens")
+			return
+		}
+		if err := s.createUserAuthSignInActivity(ctx, user); err != nil {
+			ctx.String(http.StatusInternalServerError, "Failed to create activity")
+			return
+		}
+		ctx.JSON(http.StatusOK, composeResponse(user))
+	})
+
 	rg.POST("/auth/signup", func(ctx *gin.Context) {
 		signup := &api.SignUp{}
-		if err := json.NewDecoder(ctx.Request.Body).Decode(signup); err != nil {
+		if err := json.NewDecoder(ctx.Request.Body).Decode(&signup); err != nil {
 			ctx.String(http.StatusBadRequest, "Malformatted signup request")
 			return
 		}
@@ -26,7 +67,6 @@ func (s *Service) registerAuthRoutes(rg *gin.RouterGroup, secret string) {
 			OpenID:   common.GenUUID(),
 		}
 		hostUserType := api.Host
-		// 查找所有host用户
 		existedHostUsers, err := s.Store.FindUserList(ctx, &api.UserFind{
 			Role: &hostUserType,
 		})
@@ -34,12 +74,9 @@ func (s *Service) registerAuthRoutes(rg *gin.RouterGroup, secret string) {
 			ctx.String(http.StatusBadRequest, "Failed to find users")
 			return
 		}
-		// 看host用户是否存在
 		if len(existedHostUsers) == 0 {
-			// 第一个注册的用户，设置为host用户
 			userCreate.Role = api.Host
 		} else {
-			// 查找运行注册设置
 			allowSignUpSetting, err := s.Store.FindSystemSetting(ctx, &api.SystemSettingFind{
 				Name: api.SystemSettingAllowSignUpName,
 			})
@@ -47,6 +84,7 @@ func (s *Service) registerAuthRoutes(rg *gin.RouterGroup, secret string) {
 				ctx.String(http.StatusInternalServerError, "Failed to find system setting")
 				return
 			}
+
 			allowSignUpSettingValue := false
 			if allowSignUpSetting != nil {
 				err = json.Unmarshal([]byte(allowSignUpSetting.Value), &allowSignUpSettingValue)
@@ -56,7 +94,7 @@ func (s *Service) registerAuthRoutes(rg *gin.RouterGroup, secret string) {
 				}
 			}
 			if !allowSignUpSettingValue {
-				ctx.String(http.StatusUnauthorized, "signup is disabled")
+				ctx.String(http.StatusUnauthorized, "Signup is disabled")
 				return
 			}
 		}
@@ -85,6 +123,27 @@ func (s *Service) registerAuthRoutes(rg *gin.RouterGroup, secret string) {
 		}
 		ctx.JSON(http.StatusOK, composeResponse(user))
 	})
+}
+
+func (s *Service) createUserAuthSignInActivity(ctx *gin.Context, user *api.User) error {
+	payload := api.ActivityUserAuthSignInPayload{
+		UserID: user.ID,
+		IP:     ctx.Request.Header.Get("X-Forward-For"),
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return errors.Wrap(err, "failed to marshal activity payload")
+	}
+	activity, err := s.Store.CreateActivity(ctx, &api.ActivityCreate{
+		CreatorID: user.ID,
+		Type:      api.ActivityUserAuthSignIn,
+		Level:     api.ActivityInfo,
+		Payload:   string(payloadBytes),
+	})
+	if err != nil || activity == nil {
+		return errors.Wrap(err, "failed to create activity")
+	}
+	return err
 }
 
 func (s *Service) createUserAuthSignUpActivity(ctx *gin.Context, user *api.User) error {
