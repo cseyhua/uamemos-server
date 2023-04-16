@@ -45,6 +45,22 @@ func (raw *userRaw) toUser() *api.User {
 	}
 }
 
+func (s *Store) ComposeMemoCreator(ctx context.Context, memo *api.Memo) error {
+	user, err := s.FindUser(ctx, &api.UserFind{
+		ID: &memo.CreatorID,
+	})
+	if err != nil {
+		return err
+	}
+
+	if user.Nickname != "" {
+		memo.CreatorName = user.Nickname
+	} else {
+		memo.CreatorName = user.Name
+	}
+	return nil
+}
+
 func (s *Store) CreateUser(ctx context.Context, create *api.UserCreate) (*api.User, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

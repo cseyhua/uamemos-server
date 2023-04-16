@@ -13,9 +13,9 @@ type Store struct {
 
 	userCache        sync.Map // map[int]*userRaw
 	userSettingCache sync.Map // map[string]*userSettingRaw
-	// memoCache        sync.Map // map[int]*memoRaw
-	// shortcutCache    sync.Map // map[int]*shortcutRaw
-	// idpCache         sync.Map // map[int]*identityProviderMessage
+	memoCache        sync.Map // map[int]*memoRaw
+	shortcutCache    sync.Map // map[int]*shortcutRaw
+	idpCache         sync.Map // map[int]*identityProviderMessage
 }
 
 func New(db *sql.DB, profile *profile.Profile) *Store {
