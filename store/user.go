@@ -226,3 +226,119 @@ func findUserList(ctx context.Context, tx *sql.Tx, find *api.UserFind) ([]*userR
 
 	return userRawList, nil
 }
+
+func (s *Store) PatchUser(ctx context.Context, patch *api.UserPatch) (*api.User, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, FormatError(err)
+	}
+	defer tx.Rollback()
+
+	userRaw, err := patchUser(ctx, tx, patch)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, FormatError(err)
+	}
+
+	s.userCache.Store(userRaw.ID, userRaw)
+	user := userRaw.toUser()
+	return user, nil
+}
+func patchUser(ctx context.Context, tx *sql.Tx, patch *api.UserPatch) (*userRaw, error) {
+	set, args := []string{}, []any{}
+
+	if v := patch.UpdatedTs; v != nil {
+		set, args = append(set, "updated_ts = ?"), append(args, *v)
+	}
+	if v := patch.RowStatus; v != nil {
+		set, args = append(set, "row_status = ?"), append(args, *v)
+	}
+	if v := patch.Username; v != nil {
+		set, args = append(set, "username = ?"), append(args, *v)
+	}
+	if v := patch.Email; v != nil {
+		set, args = append(set, "email = ?"), append(args, *v)
+	}
+	if v := patch.Nickname; v != nil {
+		set, args = append(set, "nickname = ?"), append(args, *v)
+	}
+	if v := patch.AvatarURL; v != nil {
+		set, args = append(set, "avatar_url = ?"), append(args, *v)
+	}
+	if v := patch.PasswordHash; v != nil {
+		set, args = append(set, "password_hash = ?"), append(args, *v)
+	}
+	if v := patch.OpenID; v != nil {
+		set, args = append(set, "open_id = ?"), append(args, *v)
+	}
+
+	args = append(args, patch.ID)
+
+	query := `
+		UPDATE user
+		SET ` + strings.Join(set, ", ") + `
+		WHERE id = ?
+		RETURNING id, username, role, email, nickname, password_hash, open_id, avatar_url, created_ts, updated_ts, row_status
+	`
+	var userRaw userRaw
+	if err := tx.QueryRowContext(ctx, query, args...).Scan(
+		&userRaw.ID,
+		&userRaw.Name,
+		&userRaw.Role,
+		&userRaw.Email,
+		&userRaw.Nickname,
+		&userRaw.PasswordHash,
+		&userRaw.OpenID,
+		&userRaw.AvatarURL,
+		&userRaw.CreatedTs,
+		&userRaw.UpdatedTs,
+		&userRaw.RowStatus,
+	); err != nil {
+		return nil, FormatError(err)
+	}
+
+	return &userRaw, nil
+}
+func (s *Store) DeleteUser(ctx context.Context, delete *api.UserDelete) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return FormatError(err)
+	}
+	defer tx.Rollback()
+
+	if err := deleteUser(ctx, tx, delete); err != nil {
+		return err
+	}
+	if err := vacuum(ctx, tx); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	s.userCache.Delete(delete.ID)
+	return nil
+}
+
+func deleteUser(ctx context.Context, tx *sql.Tx, delete *api.UserDelete) error {
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM user WHERE id = ?
+	`, delete.ID)
+	if err != nil {
+		return FormatError(err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return &common.Error{Code: common.NotFound, Err: fmt.Errorf("user not found")}
+	}
+
+	return nil
+}

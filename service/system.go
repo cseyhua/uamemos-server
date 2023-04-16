@@ -14,11 +14,11 @@ import (
 	"go.uber.org/zap"
 )
 
-func (s *Service) registerSystemRoutes(g *gin.RouterGroup) {
-	g.GET("/ping", func(ctx *gin.Context) {
+func (s *Service) registerSystemRoutes(rg *gin.RouterGroup) {
+	rg.GET("/ping", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, composeResponse(s.Profile))
 	})
-	g.GET("/status", func(ctx *gin.Context) {
+	rg.GET("/status", func(ctx *gin.Context) {
 		hostUserType := api.Host
 		hostUserFind := api.UserFind{
 			Role: &hostUserType,
@@ -113,6 +113,99 @@ func (s *Service) registerSystemRoutes(g *gin.RouterGroup) {
 		}
 		ctx.JSON(http.StatusOK, composeResponse(systemStatus))
 	})
+	rg.POST("/system/setting", func(ctx *gin.Context) {
+		_userID, ok := ctx.Get(getUserIDContextKey())
+		userID, _ok := _userID.(int)
+		if !ok || !_ok {
+			ctx.String(http.StatusUnauthorized, "Missing user in session")
+			return
+		}
+
+		user, err := s.Store.FindUser(ctx, &api.UserFind{
+			ID: &userID,
+		})
+		if err != nil {
+			ctx.String(http.StatusInternalServerError, "Failed to find user")
+			return
+		}
+		if user == nil || user.Role != api.Host {
+			ctx.String(http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+
+		systemSettingUpsert := &api.SystemSettingUpsert{}
+		if err := json.NewDecoder(ctx.Request.Body).Decode(systemSettingUpsert); err != nil {
+			ctx.String(http.StatusBadRequest, "Malformatted post system setting request")
+			return
+		}
+		if err := systemSettingUpsert.Validate(); err != nil {
+			ctx.String(http.StatusBadRequest, "system setting invalidate")
+			return
+		}
+
+		systemSetting, err := s.Store.UpsertSystemSetting(ctx, systemSettingUpsert)
+		if err != nil {
+			ctx.String(http.StatusInternalServerError, "Failed to upsert system setting")
+			return
+		}
+		ctx.JSON(http.StatusOK, composeResponse(systemSetting))
+	})
+
+	rg.GET("/system/setting", func(ctx *gin.Context) {
+		_userID, ok := ctx.Get(getUserIDContextKey())
+		userID, _ok := _userID.(int)
+		if !ok || !_ok {
+			ctx.String(http.StatusUnauthorized, "Missing user in session")
+			return
+		}
+
+		user, err := s.Store.FindUser(ctx, &api.UserFind{
+			ID: &userID,
+		})
+		if err != nil {
+			ctx.String(http.StatusInternalServerError, "Failed to find user")
+			return
+		}
+		if user == nil || user.Role != api.Host {
+			ctx.String(http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+
+		systemSettingList, err := s.Store.FindSystemSettingList(ctx, &api.SystemSettingFind{})
+		if err != nil {
+			ctx.String(http.StatusInternalServerError, "Failed to find system setting list")
+			return
+		}
+		ctx.JSON(http.StatusOK, composeResponse(systemSettingList))
+	})
+
+	rg.POST("/system/vacuum", func(ctx *gin.Context) {
+		_userID, ok := ctx.Get(getUserIDContextKey())
+		userID, _ok := _userID.(int)
+		if !ok || !_ok {
+			ctx.String(http.StatusUnauthorized, "Missing user in session")
+			return
+		}
+
+		user, err := s.Store.FindUser(ctx, &api.UserFind{
+			ID: &userID,
+		})
+		if err != nil {
+			ctx.String(http.StatusInternalServerError, "Failed to find user")
+			return
+		}
+		if user == nil || user.Role != api.Host {
+			ctx.String(http.StatusUnauthorized, "Unauthorized")
+			return
+		}
+
+		if err := s.Store.Vacuum(ctx); err != nil {
+			ctx.String(http.StatusInternalServerError, "Failed to vacuum database")
+			return
+		}
+		ctx.JSON(http.StatusOK, true)
+	})
+
 }
 
 func (s *Service) getSystemServiceID(ctx context.Context) (string, error) {

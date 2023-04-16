@@ -68,6 +68,61 @@ type UserCreate struct {
 	OpenID       string
 }
 
+type UserPatch struct {
+	ID int `json:"-"`
+
+	// Standard fields
+	UpdatedTs *int64
+	RowStatus *RowStatus `json:"rowStatus"`
+
+	// Domain specific fields
+	Username     *string `json:"username"`
+	Email        *string `json:"email"`
+	Nickname     *string `json:"nickname"`
+	Password     *string `json:"password"`
+	ResetOpenID  *bool   `json:"resetOpenId"`
+	AvatarURL    *string `json:"avatarUrl"`
+	PasswordHash *string
+	OpenID       *string
+}
+
+type UserDelete struct {
+	ID int
+}
+
+func (patch UserPatch) Validate() error {
+	if patch.Username != nil && len(*patch.Username) < 3 {
+		return fmt.Errorf("username is too short, minimum length is 3")
+	}
+	if patch.Username != nil && len(*patch.Username) > 32 {
+		return fmt.Errorf("username is too long, maximum length is 32")
+	}
+	if patch.Password != nil && len(*patch.Password) < 3 {
+		return fmt.Errorf("password is too short, minimum length is 6")
+	}
+	if patch.Password != nil && len(*patch.Password) > 512 {
+		return fmt.Errorf("password is too long, maximum length is 512")
+	}
+	if patch.Nickname != nil && len(*patch.Nickname) > 64 {
+		return fmt.Errorf("nickname is too long, maximum length is 64")
+	}
+	if patch.AvatarURL != nil {
+		if len(*patch.AvatarURL) > 2<<20 {
+			return fmt.Errorf("avatar is too large, maximum is 2MB")
+		}
+	}
+	if patch.Email != nil && *patch.Email != "" {
+		if len(*patch.Email) > 256 {
+			return fmt.Errorf("email is too long, maximum length is 256")
+		}
+		if !common.ValidateEmail(*patch.Email) {
+			return fmt.Errorf("invalid email format")
+		}
+	}
+
+	return nil
+}
+
 func (create UserCreate) Validate() error {
 	if len(create.Name) < 3 {
 		return fmt.Errorf("username is too short, minimum length is 3")

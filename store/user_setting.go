@@ -22,6 +22,28 @@ func (raw *userSettingRaw) toUserSetting() *api.UserSetting {
 	}
 }
 
+func (s *Store) UpsertUserSetting(ctx context.Context, upsert *api.UserSettingUpsert) (*api.UserSetting, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, FormatError(err)
+	}
+	defer tx.Rollback()
+
+	userSettingRaw, err := upsertUserSetting(ctx, tx, upsert)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	s.userSettingCache.Store(getUserSettingCacheKey(*userSettingRaw), userSettingRaw)
+	userSetting := userSettingRaw.toUserSetting()
+
+	return userSetting, nil
+}
+
 func (s *Store) FindUserSettingList(ctx context.Context, find *api.UserSettingFind) ([]*api.UserSetting, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -113,4 +135,46 @@ func findUserSettingList(ctx context.Context, tx *sql.Tx, find *api.UserSettingF
 	}
 
 	return userSettingRawList, nil
+}
+
+func upsertUserSetting(ctx context.Context, tx *sql.Tx, upsert *api.UserSettingUpsert) (*userSettingRaw, error) {
+	query := `
+		INSERT INTO user_setting (
+			user_id, key, value
+		)
+		VALUES (?, ?, ?)
+		ON CONFLICT(user_id, key) DO UPDATE 
+		SET
+			value = EXCLUDED.value
+		RETURNING user_id, key, value
+	`
+	var userSettingRaw userSettingRaw
+	if err := tx.QueryRowContext(ctx, query, upsert.UserID, upsert.Key, upsert.Value).Scan(
+		&userSettingRaw.UserID,
+		&userSettingRaw.Key,
+		&userSettingRaw.Value,
+	); err != nil {
+		return nil, FormatError(err)
+	}
+
+	return &userSettingRaw, nil
+}
+
+func vacuumUserSetting(ctx context.Context, tx *sql.Tx) error {
+	stmt := `
+	DELETE FROM 
+		user_setting 
+	WHERE 
+		user_id NOT IN (
+			SELECT 
+				id 
+			FROM 
+				user
+		)`
+	_, err := tx.ExecContext(ctx, stmt)
+	if err != nil {
+		return FormatError(err)
+	}
+
+	return nil
 }
