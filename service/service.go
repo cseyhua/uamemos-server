@@ -99,6 +99,9 @@ func NewService(ctx context.Context, profile *profile.Profile) (*Service, error)
 	s.registerUserRoutes(apiGroup)
 	s.registerMemoRoutes(apiGroup)
 	s.registerTagRoutes(apiGroup)
+	s.registerShortcutRoutes(apiGroup)
+	s.registerResourceRoutes(apiGroup)
+	s.registerStorageRoutes(apiGroup)
 
 	return s, nil
 }
